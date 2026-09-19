@@ -1,69 +1,64 @@
 # Angular Projects with Dev container with vs-code
 - This is a (not-IDE-agnostic)  step by step guide  to show how to use the devcontainer technology in order to keep local system clean, avoiding any multi-library issues/conflicts specially with node js and angular dev.
 
-## Build the base image
+## Overview 
 
-- First,  let's pick one version of angular to implement our application. In this guide we pick the angular version 17. This guide should apply to any version resulting in possible multiple version app dev on a same host.
-- We build the docker image from a simple Dockerfile and keep under local registry or push it. (To keep things simple no push to any remote will be run).
-- Content of Dockerfile
+- To build angular apps (for this example we will be using angular v17). the following files will be used to provide clean environment
+for angular v17 development. The following files will be used: 
 
-```dockerfile
-FROM node:20-bullseye
+| File | Purpose |
+| ---- | ------- | 
+| .devcontainer/Dockerfile |	Base image, now installs deps in a cached layer (BuildKit cache mount) and runs as the non-root node user |
+| .devcontainer/docker-compose.yml | Named container, bind mount for live reload, named volume for node_modules |
+| .devcontainer/devcontainer.json | 	Now points at Compose instead of a bare image; won't recreate the container on reopen |
+| .dockerignore | 	Keeps build context small/fast |
 
-# Install Angular CLI v17 globally, pinned to match your app version
-RUN npm install -g @angular/cli@17
 
-# Set working directory inside the container
-WORKDIR /workspace
-```
 
-- Time to build with a tag (as best practice specially if we want to push ato remote registry)
-```bash
-docker build -t angular17-dev-base:1.0 -f Dockerfile .
-```
+## Build the base image 
 
-## Load the image in a project
-
-- Assuming i want to write an angular client using version 17, here are the steps to perform:
+- For all angular v17 projects we will be using the same docker image. (for any version update the Dockerfile)
 
 ```bash
-# step1
-mkdir [root-app-folder]
-
-# step2
-mkdir .devcontainer
-cd .devcontainer
-touch devcontainer.json
+docker build -t angular17-dev-base:1.0 -f .devcontainer/Dockerfile .
 ```
 
-- The content of the ```devcontainer.json``` file should be similar to:
+## Day-to-day commands
 
-```json
-{
-  "name": "my-application",
-  "image": "angular17-dev-base:1.0",
-  "workspaceFolder": "/workspace",
-  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
-  "forwardPorts": [4200],
-  "postCreateCommand": "ng version",
-  "customizations": {
-    "vscode": {
-      "extensions": [
-        "Angular.ng-template",
-        "dbaeumer.vscode-eslint",
-        "esbenp.prettier-vscode"
-      ],
-      "settings": {
-        "terminal.integrated.defaultProfile.linux": "bash"
-      }
-    }
-  },
-  "remoteUser": "node"
-}
+### first run (or after Dockerfile/deps change)
+
+```bash 
+docker compose -f .devcontainer/docker-compose.yml up -d --build
 ```
 
-- The ```devcontainer.json``` is shown as an example, lot more customization can be added based on each project's requirements.
-- The second entry wih the "image" key shows how to reference the previously built docker image
-- The linux user inside the running container, as shown in the "remoteUser" entry is "node" which means, once we are in the container, we have the node username.  
+### subsequent runs — reuses the existing container, no rebuild/recreate
 
- 
+```bash 
+docker compose -f .devcontainer/docker-compose.yml up -d
+```
+
+### watch ng serve output
+
+```bash 
+docker compose -f .devcontainer/docker-compose.yml logs -f
+```
+
+### stop without deleting the container
+
+```bash 
+docker compose -f .devcontainer/docker-compose.yml stop
+```
+
+## Why containers won't pile up anymore
+
+- Compose: container_name: shopping-cart-container is fixed, so docker compose up -d always reuses/restarts that same container instead of creating a new one each run.
+
+- VS Code Dev Containers: switched from image+runArgs to dockerComposeFile+service. I added "overrideCommand": false (so it keeps running ng serve instead of VS Code's default sleep infinity shim) and "shutdownAction": "none" (so closing the window doesn't stop/remove the container — reopening just reattaches).
+
+- App is then live at http://localhost:4200, and editing files under src/ triggers a live rebuild in the container.
+
+## One optional but bigger lever
+
+- Since your project lives at a native Windows path (C:\Users\...), Docker Desktop's Linux VM still can't watch it natively — polling works but isn't free. If you ever want to eliminate that overhead entirely, cloning the repo into the WSL2 filesystem (e.g. \\wsl$\Ubuntu\home\<you>\shopping-cart / opened via code . from a WSL shell) gets you native inotify and you can drop the CHOKIDAR_* env vars. Not required — just the next performance step if you want it.
+
+- When you add/change npm dependencies: run docker compose -f .devcontainer/docker-compose.yml up -d --build to refresh the baked-in node_modules layer.
